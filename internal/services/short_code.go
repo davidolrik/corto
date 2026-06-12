@@ -78,6 +78,7 @@ func (s *ShortCodeService) CreateShortCode(ctx context.Context, sc *handlers.Sho
 			ForwardQuery: sc.ForwardQuery,
 			ValidSince:   sc.ValidSince,
 			ValidUntil:   sc.ValidUntil,
+			MaxVisits:    sc.MaxVisits,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -240,6 +241,7 @@ func (s *ShortCodeService) UpdateShortCode(ctx context.Context, publicID string,
 	existing.ForwardQuery = sc.ForwardQuery
 	existing.ValidSince = sc.ValidSince
 	existing.ValidUntil = sc.ValidUntil
+	existing.MaxVisits = sc.MaxVisits
 	existing.UpdatedAt = now
 
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -323,6 +325,10 @@ func (s *ShortCodeService) PatchShortCode(ctx context.Context, publicID string, 
 	if patch.ValidUntil != nil {
 		existing.ValidUntil = patch.ValidUntil
 		columns = append(columns, "valid_until")
+	}
+	if patch.MaxVisits != nil {
+		existing.MaxVisits = patch.MaxVisits
+		columns = append(columns, "max_visits")
 	}
 
 	err = s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
@@ -673,6 +679,7 @@ func shortCodeToData(sc *model.ShortCode) *handlers.ShortCodeData {
 		ForwardQuery: sc.ForwardQuery,
 		ValidSince:   sc.ValidSince,
 		ValidUntil:   sc.ValidUntil,
+		MaxVisits:    sc.MaxVisits,
 		Domains:      domains,
 		Tags:         tags,
 		CreatedAt:    sc.CreatedAt,

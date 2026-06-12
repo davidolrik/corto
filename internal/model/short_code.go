@@ -20,6 +20,7 @@ type ShortCode struct {
 	ForwardQuery bool       `bun:"forward_query,default:false"` // Forward query string to target
 	ValidSince   *time.Time `bun:"valid_since"`
 	ValidUntil   *time.Time `bun:"valid_until"`
+	MaxVisits    *int       `bun:"max_visits"` // nil means unlimited
 	CreatedAt    time.Time  `bun:"created_at,notnull,default:now()"`
 	UpdatedAt    time.Time  `bun:"updated_at,notnull,default:now()"`
 

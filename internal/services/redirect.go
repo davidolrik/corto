@@ -81,8 +81,22 @@ func (s *RedirectService) ResolveRedirect(ctx context.Context, fqdn, slug string
 		ForwardQuery: shortCode.ForwardQuery,
 		ValidSince:   shortCode.ValidSince,
 		ValidUntil:   shortCode.ValidUntil,
+		MaxVisits:    shortCode.MaxVisits,
 		PlatformURLs: platformURLs,
 	}
+
+	// The visit count is only needed to enforce a limit
+	if shortCode.MaxVisits != nil {
+		visits, err := s.db.NewSelect().Model((*model.Visit)(nil)).
+			Join("JOIN short_urls AS su ON su.id = v.short_url_id").
+			Where("su.short_code_id = ?", shortCode.ID).
+			Count(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("counting visits for %q: %w", slug, err)
+		}
+		target.ShortURL.Visits = visits
+	}
+
 	return target, nil
 }
 

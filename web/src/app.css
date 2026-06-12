@@ -258,6 +258,10 @@ main {
   letter-spacing: 0.05em;
 }
 
+.row .stat-number.exhausted {
+  color: var(--danger);
+}
+
 @media (max-width: 540px) {
   .row .stats {
     margin-left: 0;

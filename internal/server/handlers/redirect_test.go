@@ -223,6 +223,66 @@ func TestRedirectValidityWindow(t *testing.T) {
 	}
 }
 
+func TestRedirectMaxVisits(t *testing.T) {
+	maxVisits := 2
+
+	cases := []struct {
+		name           string
+		visits         int
+		fallbackURL    string
+		domainFallback string
+		wantStatus     int
+		wantLocation   string
+	}{
+		{
+			name:         "below the limit redirects to target",
+			visits:       1,
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://example.com/landing",
+		},
+		{
+			name:         "at the limit uses the short code fallback",
+			visits:       2,
+			fallbackURL:  "https://example.com/sold-out",
+			wantStatus:   http.StatusFound,
+			wantLocation: "https://example.com/sold-out",
+		},
+		{
+			name:           "at the limit without short code fallback uses domain fallback",
+			visits:         2,
+			domainFallback: "https://example.com/not-found",
+			wantStatus:     http.StatusFound,
+			wantLocation:   "https://example.com/not-found",
+		},
+		{
+			name:       "at the limit without any fallback is not found",
+			visits:     3,
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeRedirectStore()
+			store.addDomain("go.example.com", tc.domainFallback).shortURLs["promo"] = &handlers.RedirectShortURL{
+				PublicID:    "su_1",
+				TargetURL:   "https://example.com/landing",
+				FallbackURL: tc.fallbackURL,
+				MaxVisits:   &maxVisits,
+				Visits:      tc.visits,
+			}
+
+			resp := doRedirectRequest(setupRedirectMux(store), "http://go.example.com/promo", nil)
+
+			if tc.wantStatus == http.StatusFound {
+				assertRedirect(t, resp, tc.wantLocation)
+			} else if resp.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, resp.Code)
+			}
+		})
+	}
+}
+
 func TestRedirectForwardQuery(t *testing.T) {
 	cases := []struct {
 		name         string

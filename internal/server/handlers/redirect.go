@@ -33,6 +33,8 @@ type RedirectShortURL struct {
 	ForwardQuery bool
 	ValidSince   *time.Time
 	ValidUntil   *time.Time
+	MaxVisits    *int // nil means unlimited
+	Visits       int  // recorded visits, only filled when MaxVisits is set
 	PlatformURLs []RedirectPlatformURL
 }
 
@@ -88,9 +90,11 @@ func RegisterRedirectRoutes(mux *http.ServeMux, store RedirectStore) {
 			}
 		}
 
-		// Outside the validity window the fallback chain applies:
-		// platform fallback, short code fallback, domain fallback
-		if !isValidNow(shortURL.ValidSince, shortURL.ValidUntil) {
+		// Outside the validity window, or with the visit limit reached,
+		// the fallback chain applies: platform fallback, short code
+		// fallback, domain fallback
+		exhausted := shortURL.MaxVisits != nil && shortURL.Visits >= *shortURL.MaxVisits
+		if exhausted || !isValidNow(shortURL.ValidSince, shortURL.ValidUntil) {
 			if fallbackURL == "" {
 				fallbackURL = target.DomainFallbackURL
 			}

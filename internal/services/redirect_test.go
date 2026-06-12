@@ -17,6 +17,57 @@ func (f fakeCountryResolver) Country(ip string) string {
 	return f[ip]
 }
 
+func TestResolveRedirectFillsVisitLimit(t *testing.T) {
+	db := testDatabase(t)
+	ctx0 := context.Background()
+
+	user := createTestUser(t, db, "password")
+	tenant := createTestTenant(t, db, user)
+	ctx := claimsContext(user, tenant)
+	domain := createTestDomain(t, db, ctx)
+
+	maxVisits := 2
+	shortCodeService := services.NewShortCodeService(testLogger(), db)
+	created, err := shortCodeService.CreateShortCode(ctx, &handlers.ShortCodeData{
+		Slug:      "slug-" + uuid.NewString(),
+		TargetURL: "https://example.com/landing",
+		MaxVisits: &maxVisits,
+		Domains:   []string{domain.FQDN},
+	})
+	if err != nil {
+		t.Fatalf("creating short code: %v", err)
+	}
+	t.Cleanup(func() { deleteTestShortCode(t, db, created.PublicID) })
+
+	shortURL := &model.ShortURL{}
+	err = db.NewSelect().Model(shortURL).
+		Where("su.short_code_id IN (?)", db.NewSelect().Model((*model.ShortCode)(nil)).
+			Column("id").Where("public_id = ?", created.PublicID)).
+		Scan(ctx0)
+	if err != nil {
+		t.Fatalf("loading short url: %v", err)
+	}
+	visit := &model.Visit{PublicID: uuid.NewString(), ShortURLID: shortURL.ID}
+	if _, err := db.NewInsert().Model(visit).Exec(ctx0); err != nil {
+		t.Fatalf("inserting visit: %v", err)
+	}
+
+	svc := services.NewRedirectService(testLogger(), db, nil)
+	target, err := svc.ResolveRedirect(ctx0, domain.FQDN, created.Slug)
+	if err != nil {
+		t.Fatalf("resolving redirect: %v", err)
+	}
+	if target.ShortURL == nil {
+		t.Fatal("expected the slug to resolve")
+	}
+	if target.ShortURL.MaxVisits == nil || *target.ShortURL.MaxVisits != 2 {
+		t.Errorf("expected max visits 2, got %v", target.ShortURL.MaxVisits)
+	}
+	if target.ShortURL.Visits != 1 {
+		t.Errorf("expected 1 recorded visit, got %d", target.ShortURL.Visits)
+	}
+}
+
 func TestRecordVisitResolvesCountry(t *testing.T) {
 	db := testDatabase(t)
 	ctx0 := context.Background()

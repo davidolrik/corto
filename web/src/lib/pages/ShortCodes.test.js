@@ -8,6 +8,7 @@ const shortCodeList = [
     slug: 'promo',
     title: 'Spring promo',
     description: 'Landing page for the spring campaign',
+    max_visits: 100,
     target_url: 'https://example.com/landing',
     domains: ['go.example.com', 'links.example.com'],
     tags: ['marketing', 'stack'],
@@ -28,7 +29,7 @@ const tagList = [
   { public_id: 'tag-2', slug: 'stack', color: '#2a1045', description: '' },
 ]
 
-function stubFetch() {
+function stubFetch(list = shortCodeList) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url) => ({
@@ -36,7 +37,7 @@ function stubFetch() {
       status: 200,
       json: async () => {
         if (url.includes('/api/short-codes')) {
-          return shortCodeList
+          return list
         }
         if (url.includes('/api/tags')) {
           return tagList
@@ -61,15 +62,37 @@ describe('ShortCodes', () => {
     stubFetch()
   })
 
-  it('shows visits this week and in total for each link', async () => {
+  it('shows visits this week and the total against the limit', async () => {
     render(ShortCodes)
 
     await screen.findByText('Spring promo', { exact: false })
 
     expect(screen.getByText('5')).toBeTruthy()
     expect(screen.getByText('this week')).toBeTruthy()
-    expect(screen.getByText('42')).toBeTruthy()
+    const total = screen.getByText('42 / 100')
+    expect(total).toBeTruthy()
+    expect(total.classList.contains('exhausted')).toBe(false)
     expect(screen.getByText('total')).toBeTruthy()
+  })
+
+  it('shows a plain total for unlimited links', async () => {
+    stubFetch([{ ...shortCodeList[0], max_visits: null }])
+    render(ShortCodes)
+
+    await screen.findByText('Spring promo', { exact: false })
+
+    expect(screen.getByText('42')).toBeTruthy()
+    expect(screen.queryByText('42 / 100')).toBe(null)
+  })
+
+  it('marks an exhausted link', async () => {
+    stubFetch([{ ...shortCodeList[0], visits: 100 }])
+    render(ShortCodes)
+
+    await screen.findByText('Spring promo', { exact: false })
+
+    const total = screen.getByText('100 / 100')
+    expect(total.classList.contains('exhausted')).toBe(true)
   })
 
   it('keeps rows to configuration chips only', async () => {
@@ -181,6 +204,7 @@ describe('ShortCodes', () => {
     const slugInput = screen.getByLabelText('Slug')
     expect(slugInput.value).toBe('promo')
     expect(screen.getByLabelText('Description').value).toBe('Landing page for the spring campaign')
+    expect(screen.getByLabelText('Max visits').value).toBe('100')
     expect(container.querySelector('.row-stats')).toBe(null)
   })
 })

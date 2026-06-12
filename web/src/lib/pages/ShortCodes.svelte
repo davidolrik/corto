@@ -30,6 +30,7 @@
       is_crawlable: false,
       valid_since: '',
       valid_until: '',
+      max_visits: '',
       domains: [],
       tags: [],
     }
@@ -72,6 +73,7 @@
       is_crawlable: sc.is_crawlable,
       valid_since: toDateTimeInput(sc.valid_since),
       valid_until: toDateTimeInput(sc.valid_until),
+      max_visits: sc.max_visits ?? '',
       domains: [...sc.domains],
       tags: [...sc.tags],
     }
@@ -94,6 +96,7 @@
       is_crawlable: form.is_crawlable,
       valid_since: fromDateTimeInput(form.valid_since),
       valid_until: fromDateTimeInput(form.valid_until),
+      max_visits: form.max_visits === '' ? undefined : Number(form.max_visits),
       domains: form.domains,
       tags: form.tags,
     }
@@ -220,6 +223,10 @@
           <label for="sc-until">Valid until</label>
           <input id="sc-until" type="datetime-local" bind:value={form.valid_until} />
         </div>
+        <div class="field">
+          <label for="sc-max-visits">Max visits</label>
+          <input id="sc-max-visits" type="number" min="1" bind:value={form.max_visits} placeholder="unlimited" />
+        </div>
       </div>
       <div class="field">
         <label for="sc-domains">Domains</label>
@@ -319,7 +326,10 @@
             <span class="stat-label">this week</span>
           </span>
           <span class="stat">
-            <span class="stat-number">{sc.visits}</span>
+            <span
+              class="stat-number"
+              class:exhausted={sc.max_visits != null && sc.visits >= sc.max_visits}
+            >{sc.visits}{sc.max_visits != null ? ` / ${sc.max_visits}` : ''}</span>
             <span class="stat-label">total</span>
           </span>
         </div>

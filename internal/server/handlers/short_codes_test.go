@@ -273,6 +273,39 @@ func TestShortCodeDescriptionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestShortCodeMaxVisitsRoundTrip(t *testing.T) {
+	api := setupShortCodeAPI(t)
+
+	resp := api.Post("/api/short-codes", map[string]any{
+		"slug":       "limited",
+		"target_url": "https://example.com",
+		"max_visits": 100,
+		"domains":    []string{"a.io"},
+	})
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, resp.Code, resp.Body.String())
+	}
+
+	var created handlers.ShortCodeBody
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decoding create response: %v", err)
+	}
+	if created.MaxVisits == nil || *created.MaxVisits != 100 {
+		t.Errorf("expected max_visits 100, got %v", created.MaxVisits)
+	}
+
+	// Zero is rejected; the minimum meaningful cap is one visit
+	resp = api.Post("/api/short-codes", map[string]any{
+		"slug":       "broken",
+		"target_url": "https://example.com",
+		"max_visits": 0,
+		"domains":    []string{"a.io"},
+	})
+	if resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status %d for max_visits 0, got %d: %s", http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+	}
+}
+
 func TestCreateShortCodeWithoutSlug(t *testing.T) {
 	api := setupShortCodeAPI(t)
 

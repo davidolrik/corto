@@ -31,6 +31,7 @@ type ShortCodeData struct {
 	ForwardQuery     bool
 	ValidSince       *time.Time
 	ValidUntil       *time.Time
+	MaxVisits        *int
 	Domains          []string
 	Tags             []string
 	Visits           int
@@ -54,6 +55,7 @@ type ShortCodePatch struct {
 	ForwardQuery *bool
 	ValidSince   *time.Time
 	ValidUntil   *time.Time
+	MaxVisits    *int
 	Domains      *[]string
 	Tags         *[]string
 }
@@ -70,6 +72,7 @@ type CreateShortCodeInput struct {
 		ForwardQuery bool       `json:"forward_query,omitempty" doc:"Forward query string to target"`
 		ValidSince   *time.Time `json:"valid_since,omitempty" doc:"Start of validity window"`
 		ValidUntil   *time.Time `json:"valid_until,omitempty" doc:"End of validity window"`
+		MaxVisits    *int       `json:"max_visits,omitempty" minimum:"1" doc:"Maximum number of visits before the link stops redirecting"`
 		Domains      []string   `json:"domains" required:"true" minItems:"1" doc:"Domain FQDNs where this short code is available"`
 		Tags         []string   `json:"tags,omitempty" doc:"Tag slugs to associate with this short code"`
 	}
@@ -92,6 +95,7 @@ type ShortCodeBody struct {
 	ForwardQuery     bool           `json:"forward_query" doc:"Forward query string to target"`
 	ValidSince       *time.Time     `json:"valid_since,omitempty" doc:"Start of validity window"`
 	ValidUntil       *time.Time     `json:"valid_until,omitempty" doc:"End of validity window"`
+	MaxVisits        *int           `json:"max_visits,omitempty" doc:"Maximum number of visits before the link stops redirecting"`
 	Domains          []string       `json:"domains" doc:"Domain FQDNs where this short code is available"`
 	Tags             []string       `json:"tags" doc:"Tag slugs associated with this short code"`
 	Visits           int            `json:"visits" doc:"Total number of recorded visits"`
@@ -121,6 +125,7 @@ type UpdateShortCodeInput struct {
 		ForwardQuery bool       `json:"forward_query,omitempty" doc:"Forward query string to target"`
 		ValidSince   *time.Time `json:"valid_since,omitempty" doc:"Start of validity window"`
 		ValidUntil   *time.Time `json:"valid_until,omitempty" doc:"End of validity window"`
+		MaxVisits    *int       `json:"max_visits,omitempty" minimum:"1" doc:"Maximum number of visits before the link stops redirecting"`
 		Domains      []string   `json:"domains" required:"true" minItems:"1" doc:"Domain FQDNs where this short code is available"`
 		Tags         []string   `json:"tags,omitempty" doc:"Tag slugs to associate with this short code"`
 	}
@@ -139,6 +144,7 @@ type PatchShortCodeInput struct {
 		ForwardQuery *bool      `json:"forward_query,omitempty" doc:"Forward query string to target"`
 		ValidSince   *time.Time `json:"valid_since,omitempty" doc:"Start of validity window"`
 		ValidUntil   *time.Time `json:"valid_until,omitempty" doc:"End of validity window"`
+		MaxVisits    *int       `json:"max_visits,omitempty" minimum:"1" doc:"Maximum number of visits before the link stops redirecting"`
 		Domains      *[]string  `json:"domains,omitempty" minItems:"1" doc:"Domain FQDNs where this short code is available"`
 		Tags         *[]string  `json:"tags,omitempty" doc:"Tag slugs to associate with this short code"`
 	}
@@ -186,6 +192,7 @@ func shortCodeDataToBody(d *ShortCodeData) ShortCodeBody {
 		ForwardQuery:     d.ForwardQuery,
 		ValidSince:       d.ValidSince,
 		ValidUntil:       d.ValidUntil,
+		MaxVisits:        d.MaxVisits,
 		Domains:          domains,
 		Tags:             tags,
 		Visits:           d.Visits,
@@ -232,6 +239,7 @@ func RegisterShortCodeRoutes(api huma.API, store ShortCodeStore) {
 			ForwardQuery: input.Body.ForwardQuery,
 			ValidSince:   input.Body.ValidSince,
 			ValidUntil:   input.Body.ValidUntil,
+			MaxVisits:    input.Body.MaxVisits,
 			Domains:      input.Body.Domains,
 			Tags:         input.Body.Tags,
 		}
@@ -291,6 +299,7 @@ func RegisterShortCodeRoutes(api huma.API, store ShortCodeStore) {
 			ForwardQuery: input.Body.ForwardQuery,
 			ValidSince:   input.Body.ValidSince,
 			ValidUntil:   input.Body.ValidUntil,
+			MaxVisits:    input.Body.MaxVisits,
 			Domains:      input.Body.Domains,
 			Tags:         input.Body.Tags,
 		}
@@ -318,6 +327,7 @@ func RegisterShortCodeRoutes(api huma.API, store ShortCodeStore) {
 			ForwardQuery: input.Body.ForwardQuery,
 			ValidSince:   input.Body.ValidSince,
 			ValidUntil:   input.Body.ValidUntil,
+			MaxVisits:    input.Body.MaxVisits,
 			Domains:      input.Body.Domains,
 			Tags:         input.Body.Tags,
 		}
