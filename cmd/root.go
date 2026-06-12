@@ -53,6 +53,7 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(NewServerCommand())
 	rootCmd.AddCommand(NewUserCommand())
 	rootCmd.AddCommand(NewTenantCommand())
+	rootCmd.AddCommand(NewImportCommand())
 
 	return rootCmd
 }
