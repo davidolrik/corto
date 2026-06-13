@@ -26,9 +26,21 @@ func fakeShlink(t *testing.T, defaultDomainFQDN, customDomainFQDN string) *httpt
 		}
 		page := r.URL.Query().Get("page")
 		if page == "2" {
+			// promo also exists on the custom domain with the same target,
+			// which corto represents as one link on two domains
 			fmt.Fprintf(w, `{
 				"shortUrls": {
 					"data": [
+						{
+							"shortCode": "promo",
+							"longUrl": "https://example.com/landing",
+							"domain": "%s",
+							"title": "Spring promo",
+							"tags": ["spring"],
+							"crawlable": true,
+							"forwardQuery": true,
+							"meta": {"validSince": null, "validUntil": null}
+						},
 						{
 							"shortCode": "dup",
 							"longUrl": "https://example.com/duplicate",
@@ -42,7 +54,7 @@ func fakeShlink(t *testing.T, defaultDomainFQDN, customDomainFQDN string) *httpt
 					],
 					"pagination": {"currentPage": 2, "pagesCount": 2}
 				}
-			}`)
+			}`, customDomainFQDN)
 			return
 		}
 		fmt.Fprintf(w, `{
@@ -76,6 +88,23 @@ func fakeShlink(t *testing.T, defaultDomainFQDN, customDomainFQDN string) *httpt
 	mux.HandleFunc("GET /rest/v3/short-urls/{code}/visits", func(w http.ResponseWriter, r *http.Request) {
 		if r.PathValue("code") != "promo" {
 			fmt.Fprint(w, `{"visits": {"data": [], "pagination": {"currentPage": 1, "pagesCount": 1}}}`)
+			return
+		}
+		// The custom domain's promo has its own visit history
+		if r.URL.Query().Get("domain") == customDomainFQDN {
+			fmt.Fprint(w, `{
+				"visits": {
+					"data": [
+						{
+							"referer": "",
+							"date": "2026-05-03T12:00:00+00:00",
+							"userAgent": "imported-agent/3.0",
+							"visitLocation": null
+						}
+					],
+					"pagination": {"currentPage": 1, "pagesCount": 1}
+				}
+			}`)
 			return
 		}
 		fmt.Fprint(w, `{
@@ -164,6 +193,9 @@ func TestImportShlink(t *testing.T) {
 	if summary.ShortCodes != 2 {
 		t.Errorf("expected 2 imported short codes, got %d", summary.ShortCodes)
 	}
+	if summary.Merged != 1 {
+		t.Errorf("expected 1 merged domain, got %d", summary.Merged)
+	}
 	if summary.Skipped != 1 {
 		t.Errorf("expected 1 skipped short code, got %d", summary.Skipped)
 	}
@@ -173,8 +205,8 @@ func TestImportShlink(t *testing.T) {
 	if summary.Tags != 1 {
 		t.Errorf("expected 1 created tag, got %d", summary.Tags)
 	}
-	if summary.Visits != 2 {
-		t.Errorf("expected 2 imported visits, got %d", summary.Visits)
+	if summary.Visits != 3 {
+		t.Errorf("expected 3 imported visits, got %d", summary.Visits)
 	}
 
 	// The imported promo link carries everything over
@@ -206,11 +238,19 @@ func TestImportShlink(t *testing.T) {
 	if len(promo.Tags) != 1 || promo.Tags[0] != "spring" {
 		t.Errorf("expected tags [spring], got %v", promo.Tags)
 	}
-	if promo.Visits != 2 {
-		t.Errorf("expected 2 visits on promo, got %d", promo.Visits)
+
+	// Same code on two Shlink domains becomes one corto link on both domains
+	if len(promo.Domains) != 2 {
+		t.Fatalf("expected promo on 2 domains, got %v", promo.Domains)
 	}
-	if promo.VisitsByCountry["DK"] != 1 || promo.VisitsByCountry["unknown"] != 1 {
-		t.Errorf("expected countries DK and unknown, got %v", promo.VisitsByCountry)
+	if promo.Visits != 3 {
+		t.Errorf("expected 3 visits on promo, got %d", promo.Visits)
+	}
+	if promo.VisitsByDomain[defaultDomain] != 2 || promo.VisitsByDomain[customDomain] != 1 {
+		t.Errorf("expected per domain visits 2 and 1, got %v", promo.VisitsByDomain)
+	}
+	if promo.VisitsByCountry["DK"] != 1 || promo.VisitsByCountry["unknown"] != 2 {
+		t.Errorf("expected countries DK 1 and unknown 2, got %v", promo.VisitsByCountry)
 	}
 
 	docs := bySlug["docs"]

@@ -43,8 +43,8 @@ visit history (dates, referers, user agents, countries) is imported as well.`,
 			}
 
 			fmt.Printf(
-				"Imported %d links (%d skipped), %d new domains, %d new tags, %d visits\n",
-				summary.ShortCodes, summary.Skipped, summary.Domains, summary.Tags, summary.Visits,
+				"Imported %d links (%d merged onto existing links, %d skipped), %d new domains, %d new tags, %d visits\n",
+				summary.ShortCodes, summary.Merged, summary.Skipped, summary.Domains, summary.Tags, summary.Visits,
 			)
 			return nil
 		},

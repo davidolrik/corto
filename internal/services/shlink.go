@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ type ShlinkImportSummary struct {
 	Domains    int
 	Tags       int
 	ShortCodes int
+	Merged     int // domains added to an existing link with the same slug and target
 	Skipped    int // short codes whose slug was already taken on the domain
 	Visits     int
 }
@@ -137,6 +139,17 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		knownTags[t.Slug] = true
 	}
 
+	// Links keyed by slug and target, so the same Shlink code on several
+	// domains becomes one corto link spanning those domains
+	knownLinks := map[string]*handlers.ShortCodeData{}
+	links, err := shortCodeService.ListShortCodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, link := range links {
+		knownLinks[link.Slug+"|"+link.TargetURL] = link
+	}
+
 	summary := &ShlinkImportSummary{}
 	for page := 1; ; page++ {
 		var response struct {
@@ -151,7 +164,7 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		}
 
 		for _, item := range response.ShortURLs.Data {
-			if err := s.importShortURL(ctx, opts, item, domainService, tagService, shortCodeService, knownDomains, knownTags, summary); err != nil {
+			if err := s.importShortURL(ctx, opts, item, domainService, tagService, shortCodeService, knownDomains, knownTags, knownLinks, summary); err != nil {
 				return nil, err
 			}
 		}
@@ -172,6 +185,7 @@ func (s *ShlinkImporter) importShortURL(
 	tagService *TagService,
 	shortCodeService *ShortCodeService,
 	knownDomains, knownTags map[string]bool,
+	knownLinks map[string]*handlers.ShortCodeData,
 	summary *ShlinkImportSummary,
 ) error {
 	fqdn := opts.DefaultDomain
@@ -202,11 +216,29 @@ func (s *ShlinkImporter) importShortURL(
 		summary.Tags++
 	}
 
+	// The same code with the same target on another domain extends the
+	// existing link to that domain instead of creating a duplicate
+	linkKey := item.ShortCode + "|" + item.LongURL
+	if existing := knownLinks[linkKey]; existing != nil {
+		if !slices.Contains(existing.Domains, fqdn) {
+			domains := append(slices.Clone(existing.Domains), fqdn)
+			if _, err := shortCodeService.PatchShortCode(ctx, existing.PublicID, &handlers.ShortCodePatch{Domains: &domains}); err != nil {
+				return fmt.Errorf("adding domain %q to %q: %w", fqdn, item.ShortCode, err)
+			}
+			existing.Domains = domains
+			summary.Merged++
+		}
+		if opts.WithVisits {
+			return s.importVisits(ctx, opts, item, fqdn, summary)
+		}
+		return nil
+	}
+
 	title := ""
 	if item.Title != nil {
 		title = *item.Title
 	}
-	_, err := shortCodeService.CreateShortCode(ctx, &handlers.ShortCodeData{
+	created, err := shortCodeService.CreateShortCode(ctx, &handlers.ShortCodeData{
 		Slug:         item.ShortCode,
 		Title:        title,
 		TargetURL:    item.LongURL,
@@ -219,13 +251,14 @@ func (s *ShlinkImporter) importShortURL(
 		Tags:         item.Tags,
 	})
 	if errors.Is(err, handlers.ErrConflict) {
-		s.log.Info("Skipping short URL, slug already taken", "slug", item.ShortCode, "domain", fqdn)
+		s.log.Info("Skipping short URL, slug already taken with a different target", "slug", item.ShortCode, "domain", fqdn)
 		summary.Skipped++
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("creating short code %q: %w", item.ShortCode, err)
 	}
+	knownLinks[linkKey] = created
 	summary.ShortCodes++
 
 	if opts.WithVisits {
