@@ -52,7 +52,7 @@ visit history (dates, referers, user agents, countries) is imported as well.`,
 	shlinkCmd.Flags().StringVar(&baseURL, "base-url", "", "Base URL of the Shlink instance")
 	shlinkCmd.Flags().StringVar(&apiKey, "api-key", "", "Shlink API key")
 	shlinkCmd.Flags().StringVar(&tenant, "tenant", "", "Slug of the corto tenant to import into")
-	shlinkCmd.Flags().StringVar(&domain, "domain", "", "Corto domain FQDN for links on Shlink's default domain")
+	shlinkCmd.Flags().StringVar(&domain, "domain", "", "Override the corto domain for links on Shlink's default domain (detected from Shlink when omitted)")
 	shlinkCmd.Flags().BoolVar(&withVisits, "with-visits", false, "Also import the visit history")
 	shlinkCmd.MarkFlagRequired("base-url")
 	shlinkCmd.MarkFlagRequired("api-key")

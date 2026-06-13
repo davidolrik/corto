@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/davidolrik/corto/internal/model"
@@ -19,6 +20,20 @@ func fakeShlink(t *testing.T, defaultDomainFQDN, customDomainFQDN string) *httpt
 	t.Helper()
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /rest/v3/domains", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Api-Key") != "test-key" {
+			http.Error(w, `{"title":"Invalid API key"}`, http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprintf(w, `{
+			"domains": {
+				"data": [
+					{"domain": "%s", "isDefault": true},
+					{"domain": "%s", "isDefault": false}
+				]
+			}
+		}`, defaultDomainFQDN, customDomainFQDN)
+	})
 	mux.HandleFunc("GET /rest/v3/short-urls", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Api-Key") != "test-key" {
 			http.Error(w, `{"title":"Invalid API key"}`, http.StatusUnauthorized)
@@ -348,6 +363,156 @@ func TestImportShlinkIsIdempotent(t *testing.T) {
 	for _, sc := range codes {
 		if sc.Slug == "promo" && sc.Visits != 3 {
 			t.Errorf("expected 3 visits on promo, got %d", sc.Visits)
+		}
+	}
+}
+
+// TestImportShlinkDetectsDefaultDomain proves links on Shlink's default
+// domain land on that domain's real name when --domain is not given.
+func TestImportShlinkDetectsDefaultDomain(t *testing.T) {
+	db := testDatabase(t)
+	ctx0 := context.Background()
+
+	user := createTestUser(t, db, "password")
+	tenant := createTestTenant(t, db, user)
+	ctx := claimsContext(user, tenant)
+
+	defaultDomain := "imp-" + uuid.NewString() + ".example.com"
+	customDomain := "custom-" + uuid.NewString() + ".example.com"
+	shlink := fakeShlink(t, defaultDomain, customDomain)
+
+	shortCodeService := services.NewShortCodeService(testLogger(), db)
+	t.Cleanup(func() {
+		codes, err := shortCodeService.ListShortCodes(ctx)
+		if err != nil {
+			t.Errorf("listing short codes for cleanup: %v", err)
+			return
+		}
+		for _, sc := range codes {
+			deleteTestShortCode(t, db, sc.PublicID)
+		}
+		for _, table := range []any{(*model.Domain)(nil), (*model.Tag)(nil)} {
+			if _, err := db.NewDelete().Model(table).Where("tenant_id = ?", tenant.ID).Exec(ctx0); err != nil {
+				t.Errorf("cleaning up tenant data: %v", err)
+			}
+		}
+	})
+
+	// No DefaultDomain given; the importer asks Shlink
+	importer := services.NewShlinkImporter(testLogger(), db)
+	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
+		BaseURL:    shlink.URL,
+		APIKey:     "test-key",
+		TenantSlug: tenant.Slug,
+	})
+	if err != nil {
+		t.Fatalf("importing without --domain: %v", err)
+	}
+	if summary.ShortCodes != 3 {
+		t.Errorf("expected 3 imported links, got %d", summary.ShortCodes)
+	}
+
+	codes, err := shortCodeService.ListShortCodes(ctx)
+	if err != nil {
+		t.Fatalf("listing short codes: %v", err)
+	}
+	for _, sc := range codes {
+		if sc.Slug == "promo" {
+			if !slices.Contains(sc.Domains, defaultDomain) {
+				t.Errorf("expected promo on Shlink's default domain %s, got %v", defaultDomain, sc.Domains)
+			}
+		}
+	}
+}
+
+// TestImportShlinkSkipsMergeConflicts proves that extending an imported link
+// to a domain where a different link already holds the slug skips the entry
+// instead of aborting.
+func TestImportShlinkSkipsMergeConflicts(t *testing.T) {
+	db := testDatabase(t)
+	ctx0 := context.Background()
+
+	user := createTestUser(t, db, "password")
+	tenant := createTestTenant(t, db, user)
+	ctx := claimsContext(user, tenant)
+
+	defaultDomain := "imp-" + uuid.NewString() + ".example.com"
+	customDomain := "custom-" + uuid.NewString() + ".example.com"
+	shlink := fakeShlink(t, defaultDomain, customDomain)
+
+	// A different link already holds "promo" on the custom domain, so the
+	// merge of the imported promo onto that domain must be skipped
+	domainService := services.NewDomainService(testLogger(), db)
+	if _, err := domainService.CreateDomain(ctx, &handlers.DomainData{FQDN: customDomain}); err != nil {
+		t.Fatalf("creating custom domain: %v", err)
+	}
+	shortCodeService := services.NewShortCodeService(testLogger(), db)
+	if _, err := shortCodeService.CreateShortCode(ctx, &handlers.ShortCodeData{
+		Slug:      "promo",
+		TargetURL: "https://example.com/a-different-promo",
+		Domains:   []string{customDomain},
+	}); err != nil {
+		t.Fatalf("creating conflicting short code: %v", err)
+	}
+
+	t.Cleanup(func() {
+		codes, err := shortCodeService.ListShortCodes(ctx)
+		if err != nil {
+			t.Errorf("listing short codes for cleanup: %v", err)
+			return
+		}
+		for _, sc := range codes {
+			deleteTestShortCode(t, db, sc.PublicID)
+		}
+		for _, table := range []any{(*model.Domain)(nil), (*model.Tag)(nil)} {
+			if _, err := db.NewDelete().Model(table).Where("tenant_id = ?", tenant.ID).Exec(ctx0); err != nil {
+				t.Errorf("cleaning up tenant data: %v", err)
+			}
+		}
+	})
+
+	importer := services.NewShlinkImporter(testLogger(), db)
+	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
+		BaseURL:       shlink.URL,
+		APIKey:        "test-key",
+		TenantSlug:    tenant.Slug,
+		DefaultDomain: defaultDomain,
+		WithVisits:    true,
+	})
+	if err != nil {
+		t.Fatalf("import must not abort on a merge conflict: %v", err)
+	}
+
+	// promo (default), docs, dup import; the custom-domain promo is skipped
+	if summary.ShortCodes != 3 {
+		t.Errorf("expected 3 imported links, got %d", summary.ShortCodes)
+	}
+	if summary.Skipped != 1 {
+		t.Errorf("expected 1 skipped entry, got %d", summary.Skipped)
+	}
+
+	// The imported promo stays on the default domain only, and the skipped
+	// entry's visits must not land on the conflicting link
+	codes, err := shortCodeService.ListShortCodes(ctx)
+	if err != nil {
+		t.Fatalf("listing short codes: %v", err)
+	}
+	for _, sc := range codes {
+		if sc.Slug != "promo" {
+			continue
+		}
+		switch sc.TargetURL {
+		case "https://example.com/landing":
+			if len(sc.Domains) != 1 || sc.Domains[0] != defaultDomain {
+				t.Errorf("expected imported promo on %s only, got %v", defaultDomain, sc.Domains)
+			}
+			if sc.Visits != 2 {
+				t.Errorf("expected 2 visits on imported promo, got %d", sc.Visits)
+			}
+		case "https://example.com/a-different-promo":
+			if sc.Visits != 0 {
+				t.Errorf("expected no visits on the conflicting promo, got %d", sc.Visits)
+			}
 		}
 	}
 }

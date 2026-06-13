@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -107,6 +106,20 @@ func domainDataToBody(d *DomainData) DomainBody {
 	}
 }
 
+// domainError maps store errors to HTTP errors: conflicts become 409,
+// missing domains 404, and anything else an internal error with the given
+// fallback message.
+func domainError(err error, fallback string) error {
+	switch {
+	case errors.Is(err, ErrConflict):
+		return huma.Error409Conflict(err.Error())
+	case errors.Is(err, ErrNotFound):
+		return huma.Error404NotFound(err.Error())
+	default:
+		return huma.Error500InternalServerError(fallback, err)
+	}
+}
+
 // RegisterDomainRoutes registers all domain CRUD operations on the given Huma API.
 func RegisterDomainRoutes(api huma.API, store DomainStore) {
 	huma.Register(api, huma.Operation{
@@ -123,11 +136,8 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 			Description: input.Body.Description,
 		}
 		created, err := store.CreateDomain(ctx, data)
-		if errors.Is(err, ErrConflict) {
-			return nil, huma.Error409Conflict(err.Error())
-		}
 		if err != nil {
-			return nil, huma.Error500InternalServerError("failed to create domain", err)
+			return nil, domainError(err, "failed to create domain")
 		}
 		return &DomainOutput{Body: domainDataToBody(created)}, nil
 	})
@@ -141,7 +151,7 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 	}, func(ctx context.Context, input *GetDomainInput) (*DomainOutput, error) {
 		data, err := store.GetDomain(ctx, input.PublicID)
 		if err != nil {
-			return nil, huma.Error404NotFound(fmt.Sprintf("domain %q not found", input.PublicID))
+			return nil, domainError(err, "failed to load domain")
 		}
 		return &DomainOutput{Body: domainDataToBody(data)}, nil
 	})
@@ -178,7 +188,7 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 		}
 		updated, err := store.UpdateDomain(ctx, input.PublicID, data)
 		if err != nil {
-			return nil, huma.Error404NotFound(fmt.Sprintf("domain %q not found", input.PublicID))
+			return nil, domainError(err, "failed to update domain")
 		}
 		return &DomainOutput{Body: domainDataToBody(updated)}, nil
 	})
@@ -197,7 +207,7 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 		}
 		updated, err := store.PatchDomain(ctx, input.PublicID, patch)
 		if err != nil {
-			return nil, huma.Error404NotFound(fmt.Sprintf("domain %q not found", input.PublicID))
+			return nil, domainError(err, "failed to patch domain")
 		}
 		return &DomainOutput{Body: domainDataToBody(updated)}, nil
 	})
@@ -212,7 +222,7 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 	}, func(ctx context.Context, input *DeleteDomainInput) (*struct{}, error) {
 		err := store.DeleteDomain(ctx, input.PublicID)
 		if err != nil {
-			return nil, huma.Error404NotFound(fmt.Sprintf("domain %q not found", input.PublicID))
+			return nil, domainError(err, "failed to delete domain")
 		}
 		return nil, nil
 	})

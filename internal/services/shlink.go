@@ -24,7 +24,7 @@ type ShlinkImportOptions struct {
 	BaseURL       string // Shlink instance, e.g. https://s.example.com
 	APIKey        string
 	TenantSlug    string // corto tenant receiving the data
-	DefaultDomain string // corto domain for Shlink's default domain
+	DefaultDomain string // overrides Shlink's default domain; detected when empty
 	WithVisits    bool   // also import the visit history
 }
 
@@ -108,6 +108,27 @@ func (s *ShlinkImporter) fetch(ctx context.Context, opts ShlinkImportOptions, pa
 	return nil
 }
 
+// defaultDomain asks Shlink which of its domains is the default one.
+func (s *ShlinkImporter) defaultDomain(ctx context.Context, opts ShlinkImportOptions) (string, error) {
+	var response struct {
+		Domains struct {
+			Data []struct {
+				Domain    string `json:"domain"`
+				IsDefault bool   `json:"isDefault"`
+			} `json:"data"`
+		} `json:"domains"`
+	}
+	if err := s.fetch(ctx, opts, "/rest/v3/domains", url.Values{}, &response); err != nil {
+		return "", fmt.Errorf("detecting shlink's default domain: %w", err)
+	}
+	for _, d := range response.Domains.Data {
+		if d.IsDefault {
+			return d.Domain, nil
+		}
+	}
+	return "", nil
+}
+
 // Import copies short URLs (and optionally their visits) from a Shlink
 // instance into the given tenant. Domains and tags are created as needed;
 // slugs already taken on their domain are skipped.
@@ -116,6 +137,19 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 	err := s.db.NewSelect().Model(tenant).Where("slug = ?", opts.TenantSlug).Scan(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tenant %q not found: %w", opts.TenantSlug, err)
+	}
+
+	// Links on Shlink's default domain keep that domain's real name unless
+	// an explicit mapping is given
+	if opts.DefaultDomain == "" {
+		detected, err := s.defaultDomain(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		opts.DefaultDomain = detected
+		if detected != "" {
+			s.log.Info("Using Shlink's default domain", "domain", detected)
+		}
 	}
 
 	// All writes go through the regular services, scoped to the tenant
@@ -234,7 +268,15 @@ func (s *ShlinkImporter) importShortURL(
 			summary.Unchanged++
 		} else {
 			domains := append(slices.Clone(existing.Domains), fqdn)
-			if _, err := shortCodeService.PatchShortCode(ctx, existing.PublicID, &handlers.ShortCodePatch{Domains: &domains}); err != nil {
+			_, err := shortCodeService.PatchShortCode(ctx, existing.PublicID, &handlers.ShortCodePatch{Domains: &domains})
+			if errors.Is(err, handlers.ErrConflict) {
+				// A different link holds this slug on the domain; skip the
+				// entry, and don't import its visits onto the wrong link
+				s.log.Info("Skipping short URL, slug already taken with a different target", "slug", item.ShortCode, "domain", fqdn)
+				summary.Skipped++
+				return nil
+			}
+			if err != nil {
 				return fmt.Errorf("adding domain %q to %q: %w", fqdn, item.ShortCode, err)
 			}
 			existing.Domains = domains

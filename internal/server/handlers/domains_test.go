@@ -48,7 +48,7 @@ func (s *memoryDomainStore) GetDomain(_ context.Context, publicID string) (*hand
 	defer s.mu.RUnlock()
 	d, ok := s.domains[publicID]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
 	}
 	return d, nil
 }
@@ -68,7 +68,7 @@ func (s *memoryDomainStore) UpdateDomain(_ context.Context, publicID string, d *
 	defer s.mu.Unlock()
 	existing, ok := s.domains[publicID]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
 	}
 	d.PublicID = publicID
 	d.CreatedAt = existing.CreatedAt
@@ -82,7 +82,7 @@ func (s *memoryDomainStore) PatchDomain(_ context.Context, publicID string, patc
 	defer s.mu.Unlock()
 	existing, ok := s.domains[publicID]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
 	}
 	if patch.FQDN != nil {
 		existing.FQDN = *patch.FQDN
@@ -101,7 +101,7 @@ func (s *memoryDomainStore) DeleteDomain(_ context.Context, publicID string) err
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.domains[publicID]; !ok {
-		return fmt.Errorf("not found")
+		return fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
 	}
 	delete(s.domains, publicID)
 	return nil

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/davidolrik/corto/internal/model"
 	"github.com/davidolrik/corto/internal/server/handlers"
 	"github.com/google/uuid"
+	"github.com/uptrace/bun"
 )
 
 type DomainService struct {
@@ -64,8 +67,11 @@ func (s *DomainService) GetDomain(ctx context.Context, publicID string) (*handle
 		q = q.Where("d.tenant_id = ?", tenantID)
 	}
 	err = q.Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("domain %q not found: %w", publicID, err)
+		return nil, fmt.Errorf("loading domain %q: %w", publicID, err)
 	}
 	return domainToData(domain), nil
 }
@@ -107,8 +113,11 @@ func (s *DomainService) UpdateDomain(ctx context.Context, publicID string, d *ha
 		q = q.Where("d.tenant_id = ?", tenantID)
 	}
 	err = q.Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("domain %q not found: %w", publicID, err)
+		return nil, fmt.Errorf("loading domain %q: %w", publicID, err)
 	}
 
 	now := time.Now().Truncate(time.Second)
@@ -137,8 +146,11 @@ func (s *DomainService) PatchDomain(ctx context.Context, publicID string, patch 
 		q = q.Where("d.tenant_id = ?", tenantID)
 	}
 	err = q.Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("domain %q not found: %w", publicID, err)
+		return nil, fmt.Errorf("loading domain %q: %w", publicID, err)
 	}
 
 	now := time.Now().Truncate(time.Second)
@@ -178,22 +190,62 @@ func (s *DomainService) DeleteDomain(ctx context.Context, publicID string) error
 		q = q.Where("d.tenant_id = ?", tenantID)
 	}
 	err = q.Scan(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("domain %q %w", publicID, handlers.ErrNotFound)
+	}
 	if err != nil {
-		return fmt.Errorf("domain %q not found: %w", publicID, err)
+		return fmt.Errorf("loading domain %q: %w", publicID, err)
 	}
 
-	// Delete short_urls referencing this domain
-	_, err = s.db.NewDelete().Model((*model.ShortURL)(nil)).Where("domain_id = ?", domain.ID).Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("deleting short urls: %w", err)
-	}
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		// Remember which short codes lived on this domain
+		var affected []int
+		err := tx.NewSelect().Model((*model.ShortURL)(nil)).
+			Column("short_code_id").
+			Where("domain_id = ?", domain.ID).
+			Scan(ctx, &affected)
+		if err != nil {
+			return fmt.Errorf("loading short urls: %w", err)
+		}
 
-	_, err = s.db.NewDelete().Model(domain).WherePK().Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("deleting domain: %w", err)
-	}
+		// Visits reference short_urls, so they go first
+		_, err = tx.NewDelete().Model((*model.Visit)(nil)).
+			Where("short_url_id IN (?)", tx.NewSelect().Model((*model.ShortURL)(nil)).
+				Column("id").Where("domain_id = ?", domain.ID)).
+			Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("deleting visits: %w", err)
+		}
 
-	return nil
+		_, err = tx.NewDelete().Model((*model.ShortURL)(nil)).Where("domain_id = ?", domain.ID).Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("deleting short urls: %w", err)
+		}
+
+		// Short codes that only lived on this domain would be unreachable
+		// orphans; delete them along with their tag associations
+		if len(affected) > 0 {
+			orphans := tx.NewSelect().Model((*model.ShortCode)(nil)).
+				Column("id").
+				Where("sc.id IN (?)", bun.In(affected)).
+				Where("NOT EXISTS (SELECT 1 FROM short_urls su WHERE su.short_code_id = sc.id)")
+			_, err = tx.NewDelete().Model((*model.ShortCodeTag)(nil)).Where("shortcode_id IN (?)", orphans).Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("deleting orphaned short code tags: %w", err)
+			}
+			_, err = tx.NewDelete().Model((*model.ShortCode)(nil)).Where("id IN (?)", orphans).Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("deleting orphaned short codes: %w", err)
+			}
+		}
+
+		_, err = tx.NewDelete().Model(domain).WherePK().Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("deleting domain: %w", err)
+		}
+
+		return nil
+	})
 }
 
 func domainToData(d *model.Domain) *handlers.DomainData {
