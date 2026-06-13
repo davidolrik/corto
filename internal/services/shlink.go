@@ -28,13 +28,16 @@ type ShlinkImportOptions struct {
 	WithVisits    bool   // also import the visit history
 }
 
-// ShlinkImportSummary counts what an import created.
+// ShlinkImportSummary counts what an import created. Imports are idempotent:
+// re-running one yields a summary of zeroes with everything counted as
+// unchanged.
 type ShlinkImportSummary struct {
 	Domains    int
 	Tags       int
 	ShortCodes int
 	Merged     int // domains added to an existing link with the same slug and target
-	Skipped    int // short codes whose slug was already taken on the domain
+	Unchanged  int // entries that were already imported
+	Skipped    int // slug taken with a different target, or domain owned by another tenant
 	Visits     int
 }
 
@@ -198,6 +201,13 @@ func (s *ShlinkImporter) importShortURL(
 
 	if !knownDomains[fqdn] {
 		_, err := domainService.CreateDomain(ctx, &handlers.DomainData{FQDN: fqdn, Description: "Imported from Shlink"})
+		if errors.Is(err, handlers.ErrConflict) {
+			// The domain belongs to another tenant; skip its links but
+			// keep importing the rest
+			s.log.Warn("Skipping short URL, domain belongs to another tenant", "slug", item.ShortCode, "domain", fqdn)
+			summary.Skipped++
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("creating domain %q: %w", fqdn, err)
 		}
@@ -220,7 +230,9 @@ func (s *ShlinkImporter) importShortURL(
 	// existing link to that domain instead of creating a duplicate
 	linkKey := item.ShortCode + "|" + item.LongURL
 	if existing := knownLinks[linkKey]; existing != nil {
-		if !slices.Contains(existing.Domains, fqdn) {
+		if slices.Contains(existing.Domains, fqdn) {
+			summary.Unchanged++
+		} else {
 			domains := append(slices.Clone(existing.Domains), fqdn)
 			if _, err := shortCodeService.PatchShortCode(ctx, existing.PublicID, &handlers.ShortCodePatch{Domains: &domains}); err != nil {
 				return fmt.Errorf("adding domain %q to %q: %w", fqdn, item.ShortCode, err)
@@ -267,6 +279,11 @@ func (s *ShlinkImporter) importShortURL(
 	return nil
 }
 
+// visitKey identifies a visit for import deduplication.
+func visitKey(date time.Time, userAgent, referer, country string) string {
+	return date.UTC().Format(time.RFC3339Nano) + "|" + userAgent + "|" + referer + "|" + country
+}
+
 func (s *ShlinkImporter) importVisits(ctx context.Context, opts ShlinkImportOptions, item shlinkShortURL, fqdn string, summary *ShlinkImportSummary) error {
 	shortURL := &model.ShortURL{}
 	err := s.db.NewSelect().Model(shortURL).
@@ -276,6 +293,21 @@ func (s *ShlinkImporter) importVisits(ctx context.Context, opts ShlinkImportOpti
 		Scan(ctx)
 	if err != nil {
 		return fmt.Errorf("loading imported short url %q: %w", item.ShortCode, err)
+	}
+
+	// Existing visits as a multiset, so re-importing skips what is already
+	// there while identical simultaneous visits still import correctly
+	var existingVisits []model.Visit
+	err = s.db.NewSelect().Model(&existingVisits).
+		Column("created_at", "refere", "user_agent", "country").
+		Where("short_url_id = ?", shortURL.ID).
+		Scan(ctx)
+	if err != nil {
+		return fmt.Errorf("loading existing visits for %q: %w", item.ShortCode, err)
+	}
+	seen := make(map[string]int, len(existingVisits))
+	for _, v := range existingVisits {
+		seen[visitKey(v.CreatedAt, v.UserAgent, v.Referer, v.Country)]++
 	}
 
 	for page := 1; ; page++ {
@@ -295,16 +327,24 @@ func (s *ShlinkImporter) importVisits(ctx context.Context, opts ShlinkImportOpti
 		}
 
 		for _, v := range response.Visits.Data {
+			country := ""
+			if v.VisitLocation != nil {
+				country = v.VisitLocation.CountryCode
+			}
+			key := visitKey(v.Date, v.UserAgent, v.Referer, country)
+			if seen[key] > 0 {
+				seen[key]--
+				continue
+			}
+
 			visit := &model.Visit{
 				PublicID:   uuid.New().String(),
 				ShortURLID: shortURL.ID,
 				Referer:    v.Referer,
 				UserAgent:  v.UserAgent,
+				Country:    country,
 				CreatedAt:  v.Date,
 				UpdatedAt:  v.Date,
-			}
-			if v.VisitLocation != nil {
-				visit.Country = v.VisitLocation.CountryCode
 			}
 			if _, err := s.db.NewInsert().Model(visit).Exec(ctx); err != nil {
 				return fmt.Errorf("inserting visit for %q: %w", item.ShortCode, err)

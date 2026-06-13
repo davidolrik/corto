@@ -31,7 +31,7 @@ func (s *memoryDomainStore) CreateDomain(_ context.Context, d *handlers.DomainDa
 	// Check for duplicate FQDN
 	for _, existing := range s.domains {
 		if existing.FQDN == d.FQDN {
-			return nil, fmt.Errorf("domain %q already exists", d.FQDN)
+			return nil, fmt.Errorf("domain %q already exists: %w", d.FQDN, handlers.ErrConflict)
 		}
 	}
 	s.seq++
@@ -105,6 +105,17 @@ func (s *memoryDomainStore) DeleteDomain(_ context.Context, publicID string) err
 	}
 	delete(s.domains, publicID)
 	return nil
+}
+
+func TestCreateDomainDuplicate(t *testing.T) {
+	api := setupDomainAPI(t)
+
+	api.Post("/api/domains", map[string]any{"fqdn": "go.example.com"})
+	resp := api.Post("/api/domains", map[string]any{"fqdn": "go.example.com"})
+
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, resp.Code, resp.Body.String())
+	}
 }
 
 func TestDomainDescriptionRoundTrip(t *testing.T) {

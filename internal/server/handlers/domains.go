@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -122,6 +123,9 @@ func RegisterDomainRoutes(api huma.API, store DomainStore) {
 			Description: input.Body.Description,
 		}
 		created, err := store.CreateDomain(ctx, data)
+		if errors.Is(err, ErrConflict) {
+			return nil, huma.Error409Conflict(err.Error())
+		}
 		if err != nil {
 			return nil, huma.Error500InternalServerError("failed to create domain", err)
 		}

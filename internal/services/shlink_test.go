@@ -266,3 +266,152 @@ func TestImportShlink(t *testing.T) {
 		t.Errorf("expected dup to be skipped, got target %q", bySlug["dup"].TargetURL)
 	}
 }
+
+// TestImportShlinkIsIdempotent proves re-imports change nothing, and that
+// the visit history can be imported in a later run.
+func TestImportShlinkIsIdempotent(t *testing.T) {
+	db := testDatabase(t)
+	ctx0 := context.Background()
+
+	user := createTestUser(t, db, "password")
+	tenant := createTestTenant(t, db, user)
+	ctx := claimsContext(user, tenant)
+
+	defaultDomain := "imp-" + uuid.NewString() + ".example.com"
+	customDomain := "custom-" + uuid.NewString() + ".example.com"
+	shlink := fakeShlink(t, defaultDomain, customDomain)
+
+	shortCodeService := services.NewShortCodeService(testLogger(), db)
+	t.Cleanup(func() {
+		codes, err := shortCodeService.ListShortCodes(ctx)
+		if err != nil {
+			t.Errorf("listing short codes for cleanup: %v", err)
+			return
+		}
+		for _, sc := range codes {
+			deleteTestShortCode(t, db, sc.PublicID)
+		}
+		for _, table := range []any{(*model.Domain)(nil), (*model.Tag)(nil)} {
+			if _, err := db.NewDelete().Model(table).Where("tenant_id = ?", tenant.ID).Exec(ctx0); err != nil {
+				t.Errorf("cleaning up tenant data: %v", err)
+			}
+		}
+	})
+
+	importer := services.NewShlinkImporter(testLogger(), db)
+	opts := services.ShlinkImportOptions{
+		BaseURL:       shlink.URL,
+		APIKey:        "test-key",
+		TenantSlug:    tenant.Slug,
+		DefaultDomain: defaultDomain,
+	}
+
+	// First run without visits
+	first, err := importer.Import(ctx0, opts)
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	if first.ShortCodes != 3 || first.Merged != 1 || first.Visits != 0 {
+		t.Errorf("first run: expected 3 links, 1 merged, 0 visits, got %+v", first)
+	}
+
+	// Second run brings the visit history without duplicating links
+	opts.WithVisits = true
+	second, err := importer.Import(ctx0, opts)
+	if err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+	if second.ShortCodes != 0 || second.Merged != 0 || second.Domains != 0 || second.Tags != 0 {
+		t.Errorf("second run: expected no link changes, got %+v", second)
+	}
+	if second.Visits != 3 {
+		t.Errorf("second run: expected 3 imported visits, got %d", second.Visits)
+	}
+	if second.Unchanged != 4 {
+		t.Errorf("second run: expected 4 unchanged entries, got %d", second.Unchanged)
+	}
+
+	// Third run is a zero import
+	third, err := importer.Import(ctx0, opts)
+	if err != nil {
+		t.Fatalf("third import: %v", err)
+	}
+	if third.ShortCodes != 0 || third.Merged != 0 || third.Visits != 0 || third.Domains != 0 || third.Tags != 0 {
+		t.Errorf("third run: expected a zero import, got %+v", third)
+	}
+
+	// The visit history exists exactly once
+	codes, err := shortCodeService.ListShortCodes(ctx)
+	if err != nil {
+		t.Fatalf("listing short codes: %v", err)
+	}
+	for _, sc := range codes {
+		if sc.Slug == "promo" && sc.Visits != 3 {
+			t.Errorf("expected 3 visits on promo, got %d", sc.Visits)
+		}
+	}
+}
+
+// TestImportShlinkSkipsForeignDomains proves a domain owned by another
+// tenant skips its links without aborting the import.
+func TestImportShlinkSkipsForeignDomains(t *testing.T) {
+	db := testDatabase(t)
+	ctx0 := context.Background()
+
+	user := createTestUser(t, db, "password")
+	tenant := createTestTenant(t, db, user)
+	ctx := claimsContext(user, tenant)
+
+	otherUser := createTestUser(t, db, "password")
+	otherTenant := createTestTenant(t, db, otherUser)
+
+	defaultDomain := "imp-" + uuid.NewString() + ".example.com"
+	customDomain := "custom-" + uuid.NewString() + ".example.com"
+	shlink := fakeShlink(t, defaultDomain, customDomain)
+
+	// The custom domain already belongs to the other tenant
+	otherDomainService := services.NewDomainService(testLogger(), db)
+	foreign, err := otherDomainService.CreateDomain(claimsContext(otherUser, otherTenant), &handlers.DomainData{FQDN: customDomain})
+	if err != nil {
+		t.Fatalf("creating foreign domain: %v", err)
+	}
+
+	shortCodeService := services.NewShortCodeService(testLogger(), db)
+	t.Cleanup(func() {
+		codes, err := shortCodeService.ListShortCodes(ctx)
+		if err != nil {
+			t.Errorf("listing short codes for cleanup: %v", err)
+			return
+		}
+		for _, sc := range codes {
+			deleteTestShortCode(t, db, sc.PublicID)
+		}
+		for _, table := range []any{(*model.Domain)(nil), (*model.Tag)(nil)} {
+			for _, tenantID := range []int{tenant.ID, otherTenant.ID} {
+				if _, err := db.NewDelete().Model(table).Where("tenant_id = ?", tenantID).Exec(ctx0); err != nil {
+					t.Errorf("cleaning up tenant data: %v", err)
+				}
+			}
+		}
+	})
+	_ = foreign
+
+	importer := services.NewShlinkImporter(testLogger(), db)
+	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
+		BaseURL:       shlink.URL,
+		APIKey:        "test-key",
+		TenantSlug:    tenant.Slug,
+		DefaultDomain: defaultDomain,
+	})
+	if err != nil {
+		t.Fatalf("import must not abort on a foreign domain: %v", err)
+	}
+
+	// docs and the custom-domain promo entry are skipped; promo and dup import
+	if summary.ShortCodes != 2 {
+		t.Errorf("expected 2 imported links, got %d", summary.ShortCodes)
+	}
+	if summary.Skipped != 2 {
+		t.Errorf("expected 2 skipped entries, got %d", summary.Skipped)
+	}
+}

@@ -42,6 +42,9 @@ func (s *DomainService) CreateDomain(ctx context.Context, d *handlers.DomainData
 		UpdatedAt:   now,
 	}
 	_, err = s.db.NewInsert().Model(domain).Exec(ctx)
+	if errIsUniqueViolation(err) {
+		return nil, fmt.Errorf("domain %q already exists: %w", d.FQDN, handlers.ErrConflict)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("inserting domain: %w", err)
 	}
