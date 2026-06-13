@@ -411,6 +411,9 @@ func TestImportShlinkDetectsDefaultDomain(t *testing.T) {
 	if summary.ShortCodes != 3 {
 		t.Errorf("expected 3 imported links, got %d", summary.ShortCodes)
 	}
+	if summary.DefaultDomain != defaultDomain {
+		t.Errorf("expected the summary to report default domain %q, got %q", defaultDomain, summary.DefaultDomain)
+	}
 
 	codes, err := shortCodeService.ListShortCodes(ctx)
 	if err != nil {

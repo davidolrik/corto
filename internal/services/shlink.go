@@ -32,13 +32,14 @@ type ShlinkImportOptions struct {
 // re-running one yields a summary of zeroes with everything counted as
 // unchanged.
 type ShlinkImportSummary struct {
-	Domains    int
-	Tags       int
-	ShortCodes int
-	Merged     int // domains added to an existing link with the same slug and target
-	Unchanged  int // entries that were already imported
-	Skipped    int // slug taken with a different target, or domain owned by another tenant
-	Visits     int
+	DefaultDomain string // the domain used for Shlink's default domain links
+	Domains       int
+	Tags          int
+	ShortCodes    int
+	Merged        int // domains added to an existing link with the same slug and target
+	Unchanged     int // entries that were already imported
+	Skipped       int // slug taken with a different target, or domain owned by another tenant
+	Visits        int
 }
 
 type ShlinkImporter struct {
@@ -187,7 +188,7 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		knownLinks[link.Slug+"|"+link.TargetURL] = link
 	}
 
-	summary := &ShlinkImportSummary{}
+	summary := &ShlinkImportSummary{DefaultDomain: opts.DefaultDomain}
 	for page := 1; ; page++ {
 		var response struct {
 			ShortURLs struct {

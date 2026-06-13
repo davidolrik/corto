@@ -42,6 +42,9 @@ visit history (dates, referers, user agents, countries) is imported as well.`,
 				return err
 			}
 
+			if summary.DefaultDomain != "" {
+				fmt.Printf("Links on Shlink's default domain mapped to %q\n", summary.DefaultDomain)
+			}
 			fmt.Printf(
 				"Imported %d links (%d merged onto existing links, %d unchanged, %d skipped), %d new domains, %d new tags, %d visits\n",
 				summary.ShortCodes, summary.Merged, summary.Unchanged, summary.Skipped, summary.Domains, summary.Tags, summary.Visits,
