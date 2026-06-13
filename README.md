@@ -157,14 +157,13 @@ corto import shlink \
   --with-visits
 ```
 
-Imports are idempotent: re-running changes nothing, and the visit history can be imported in a later run. Links on Shlink's default domain keep that domain's name, detected via the Shlink API.
+Imports are idempotent: re-running changes nothing, and the visit history can be imported in a later run. Links on Shlink's default domain keep that domain's name, detected via the Shlink API — only links that exist in Shlink are created.
 
 | Flag            | Description                                                              |
 | --------------- | ------------------------------------------------------------------------ |
 | `--base-url`    | Shlink instance URL                                                      |
 | `--api-key`     | Shlink API key                                                           |
 | `--tenant`      | Corto tenant slug to import into                                         |
-| `--domain`      | Override the corto domain for links on Shlink's default domain           |
 | `--with-visits` | Also import the visit history (dates, referers, user agents, countries) |
 
 ### `corto config show` / `corto config write`

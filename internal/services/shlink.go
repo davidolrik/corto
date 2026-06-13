@@ -21,11 +21,10 @@ import (
 
 // ShlinkImportOptions configures an import from a Shlink instance.
 type ShlinkImportOptions struct {
-	BaseURL       string // Shlink instance, e.g. https://s.example.com
-	APIKey        string
-	TenantSlug    string // corto tenant receiving the data
-	DefaultDomain string // overrides Shlink's default domain; detected when empty
-	WithVisits    bool   // also import the visit history
+	BaseURL    string // Shlink instance, e.g. https://s.example.com
+	APIKey     string
+	TenantSlug string // corto tenant receiving the data
+	WithVisits bool   // also import the visit history
 }
 
 // ShlinkImportSummary counts what an import created. Imports are idempotent:
@@ -140,17 +139,14 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		return nil, fmt.Errorf("tenant %q not found: %w", opts.TenantSlug, err)
 	}
 
-	// Links on Shlink's default domain keep that domain's real name unless
-	// an explicit mapping is given
-	if opts.DefaultDomain == "" {
-		detected, err := s.defaultDomain(ctx, opts)
-		if err != nil {
-			return nil, err
-		}
-		opts.DefaultDomain = detected
-		if detected != "" {
-			s.log.Info("Using Shlink's default domain", "domain", detected)
-		}
+	// Links on Shlink's default domain keep that domain's real name, so
+	// only links that actually exist in Shlink are created
+	defaultDomain, err := s.defaultDomain(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if defaultDomain != "" {
+		s.log.Info("Using Shlink's default domain", "domain", defaultDomain)
 	}
 
 	// All writes go through the regular services, scoped to the tenant
@@ -188,7 +184,7 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		knownLinks[link.Slug+"|"+link.TargetURL] = link
 	}
 
-	summary := &ShlinkImportSummary{DefaultDomain: opts.DefaultDomain}
+	summary := &ShlinkImportSummary{DefaultDomain: defaultDomain}
 	for page := 1; ; page++ {
 		var response struct {
 			ShortURLs struct {
@@ -202,7 +198,7 @@ func (s *ShlinkImporter) Import(ctx context.Context, opts ShlinkImportOptions) (
 		}
 
 		for _, item := range response.ShortURLs.Data {
-			if err := s.importShortURL(ctx, opts, item, domainService, tagService, shortCodeService, knownDomains, knownTags, knownLinks, summary); err != nil {
+			if err := s.importShortURL(ctx, opts, item, defaultDomain, domainService, tagService, shortCodeService, knownDomains, knownTags, knownLinks, summary); err != nil {
 				return nil, err
 			}
 		}
@@ -219,6 +215,7 @@ func (s *ShlinkImporter) importShortURL(
 	ctx context.Context,
 	opts ShlinkImportOptions,
 	item shlinkShortURL,
+	defaultDomain string,
 	domainService *DomainService,
 	tagService *TagService,
 	shortCodeService *ShortCodeService,
@@ -226,12 +223,12 @@ func (s *ShlinkImporter) importShortURL(
 	knownLinks map[string]*handlers.ShortCodeData,
 	summary *ShlinkImportSummary,
 ) error {
-	fqdn := opts.DefaultDomain
+	fqdn := defaultDomain
 	if item.Domain != nil && *item.Domain != "" {
 		fqdn = *item.Domain
 	}
 	if fqdn == "" {
-		return fmt.Errorf("short URL %q uses Shlink's default domain; provide a corto domain with --domain", item.ShortCode)
+		return fmt.Errorf("short URL %q uses Shlink's default domain, but the instance reports no default domain", item.ShortCode)
 	}
 
 	if !knownDomains[fqdn] {

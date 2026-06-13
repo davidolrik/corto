@@ -195,11 +195,10 @@ func TestImportShlink(t *testing.T) {
 
 	importer := services.NewShlinkImporter(testLogger(), db)
 	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
-		BaseURL:       shlink.URL,
-		APIKey:        "test-key",
-		TenantSlug:    tenant.Slug,
-		DefaultDomain: defaultDomain,
-		WithVisits:    true,
+		BaseURL:    shlink.URL,
+		APIKey:     "test-key",
+		TenantSlug: tenant.Slug,
+		WithVisits: true,
 	})
 	if err != nil {
 		t.Fatalf("importing from shlink: %v", err)
@@ -315,10 +314,9 @@ func TestImportShlinkIsIdempotent(t *testing.T) {
 
 	importer := services.NewShlinkImporter(testLogger(), db)
 	opts := services.ShlinkImportOptions{
-		BaseURL:       shlink.URL,
-		APIKey:        "test-key",
-		TenantSlug:    tenant.Slug,
-		DefaultDomain: defaultDomain,
+		BaseURL:    shlink.URL,
+		APIKey:     "test-key",
+		TenantSlug: tenant.Slug,
 	}
 
 	// First run without visits
@@ -476,11 +474,10 @@ func TestImportShlinkSkipsMergeConflicts(t *testing.T) {
 
 	importer := services.NewShlinkImporter(testLogger(), db)
 	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
-		BaseURL:       shlink.URL,
-		APIKey:        "test-key",
-		TenantSlug:    tenant.Slug,
-		DefaultDomain: defaultDomain,
-		WithVisits:    true,
+		BaseURL:    shlink.URL,
+		APIKey:     "test-key",
+		TenantSlug: tenant.Slug,
+		WithVisits: true,
 	})
 	if err != nil {
 		t.Fatalf("import must not abort on a merge conflict: %v", err)
@@ -566,10 +563,9 @@ func TestImportShlinkSkipsForeignDomains(t *testing.T) {
 
 	importer := services.NewShlinkImporter(testLogger(), db)
 	summary, err := importer.Import(ctx0, services.ShlinkImportOptions{
-		BaseURL:       shlink.URL,
-		APIKey:        "test-key",
-		TenantSlug:    tenant.Slug,
-		DefaultDomain: defaultDomain,
+		BaseURL:    shlink.URL,
+		APIKey:     "test-key",
+		TenantSlug: tenant.Slug,
 	})
 	if err != nil {
 		t.Fatalf("import must not abort on a foreign domain: %v", err)
