@@ -208,3 +208,221 @@ describe('ShortCodes', () => {
     expect(container.querySelector('.row-stats')).toBe(null)
   })
 })
+
+// Four codes sharing domains and tags so cumulative AND filtering can be
+// exercised. grepmaste.rs spans the first three; mand.se only two of them.
+const filterList = [
+  {
+    ...shortCodeList[0],
+    public_id: 'sc-1',
+    slug: 'dns',
+    title: 'DNS service',
+    domains: ['grepmaste.rs', 'mand.se'],
+    tags: ['affiliate'],
+  },
+  {
+    ...shortCodeList[0],
+    public_id: 'sc-2',
+    slug: 'arc',
+    title: 'Arc browser',
+    domains: ['grepmaste.rs'],
+    tags: ['stack'],
+  },
+  {
+    ...shortCodeList[0],
+    public_id: 'sc-3',
+    slug: 'tower',
+    title: 'Git Tower',
+    domains: ['grepmaste.rs', 'mand.se'],
+    tags: ['affiliate', 'stack'],
+  },
+  {
+    ...shortCodeList[0],
+    public_id: 'sc-4',
+    slug: 'other',
+    title: 'Other thing',
+    domains: ['other.org'],
+    tags: ['editorial'],
+  },
+]
+
+// Set the typeahead box to the given query
+function type(value) {
+  return fireEvent.input(screen.getByLabelText('Filter links'), { target: { value } })
+}
+
+// Scope queries to the open suggestion menu (returns null when it is closed)
+function menu() {
+  const el = document.querySelector('.typeahead-menu')
+  return el ? within(el) : null
+}
+
+describe('ShortCodes filter', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.unstubAllGlobals()
+    stubFetch(filterList)
+  })
+
+  it('renders a filter input above the list', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    expect(screen.getByLabelText('Filter links')).toBeTruthy()
+  })
+
+  it('suggests domains and tags matching the typed text', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    expect(menu().getByRole('button', { name: 'grepmaste.rs' })).toBeTruthy()
+    expect(menu().queryByRole('button', { name: 'other.org' })).toBe(null)
+
+    await type('stac')
+    expect(menu().getByRole('button', { name: '#stack' })).toBeTruthy()
+  })
+
+  it('filters the list and shows a token when a domain is selected', async () => {
+    const { container } = render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+
+    // rendered as a domain chip with a remove control
+    expect(container.querySelector('.filter-tokens .chip.domain')).not.toBe(null)
+    expect(screen.getByRole('button', { name: 'Remove domain grepmaste.rs' })).toBeTruthy()
+
+    // the code on a different domain is gone, the rest remain
+    expect(screen.getByText('DNS service', { exact: false })).toBeTruthy()
+    expect(screen.getByText('Arc browser', { exact: false })).toBeTruthy()
+    expect(screen.getByText('Git Tower', { exact: false })).toBeTruthy()
+    expect(screen.queryByText('Other thing', { exact: false })).toBe(null)
+  })
+
+  it('ANDs every selected token, dropping codes missing any of them', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+    await type('affil')
+    await fireEvent.click(menu().getByRole('button', { name: '#affiliate' }))
+    await type('stac')
+    await fireEvent.click(menu().getByRole('button', { name: '#stack' }))
+
+    // only the code carrying grepmaste.rs AND affiliate AND stack survives
+    expect(screen.getByText('Git Tower', { exact: false })).toBeTruthy()
+    expect(screen.queryByText('DNS service', { exact: false })).toBe(null) // lacks #stack
+    expect(screen.queryByText('Arc browser', { exact: false })).toBe(null) // lacks #affiliate
+  })
+
+  it('requires all selected domains (domain AND domain)', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+    expect(screen.getByText('Arc browser', { exact: false })).toBeTruthy()
+
+    await type('mand')
+    await fireEvent.click(menu().getByRole('button', { name: 'mand.se' }))
+
+    // Arc lives only on grepmaste.rs, so requiring mand.se too removes it
+    expect(screen.queryByText('Arc browser', { exact: false })).toBe(null)
+    expect(screen.getByText('DNS service', { exact: false })).toBeTruthy()
+    expect(screen.getByText('Git Tower', { exact: false })).toBeTruthy()
+  })
+
+  it('only suggests values reachable in the current filtered set', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+
+    // other.org belongs to an excluded code, so it is not offered
+    await type('other')
+    expect(menu()).toBe(null)
+
+    // mand.se is on the filtered codes, so it is offered
+    await type('mand')
+    expect(menu().getByRole('button', { name: 'mand.se' })).toBeTruthy()
+  })
+
+  it('does not re-suggest an already selected domain', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+
+    await type('grep')
+    expect(menu()).toBe(null)
+  })
+
+  it('removes a filter when its token close button is clicked', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    await type('grep')
+    await fireEvent.click(menu().getByRole('button', { name: 'grepmaste.rs' }))
+    expect(screen.queryByText('Other thing', { exact: false })).toBe(null)
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove domain grepmaste.rs' }))
+    expect(screen.getByText('Other thing', { exact: false })).toBeTruthy()
+  })
+
+  it('adds the first suggestion on Enter', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    const input = screen.getByLabelText('Filter links')
+    await type('grep')
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(screen.getByRole('button', { name: 'Remove domain grepmaste.rs' })).toBeTruthy()
+    expect(screen.queryByText('Other thing', { exact: false })).toBe(null)
+  })
+
+  it('moves the highlight with the arrow keys and commits with Enter', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    const input = screen.getByLabelText('Filter links')
+    // "st" matches the domain grepmaste.rs and the tag stack, in that order
+    await type('st')
+    await fireEvent.keyDown(input, { key: 'ArrowDown' }) // grepmaste.rs
+    await fireEvent.keyDown(input, { key: 'ArrowDown' }) // #stack
+    await fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(screen.getByRole('button', { name: 'Remove tag stack' })).toBeTruthy()
+  })
+
+  it('commits the highlighted suggestion with Tab', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    const input = screen.getByLabelText('Filter links')
+    await type('st')
+    await fireEvent.keyDown(input, { key: 'ArrowDown' }) // grepmaste.rs
+    await fireEvent.keyDown(input, { key: 'Tab' })
+
+    expect(screen.getByRole('button', { name: 'Remove domain grepmaste.rs' })).toBeTruthy()
+  })
+
+  it('pops the last token on Backspace when the box is empty', async () => {
+    render(ShortCodes)
+    await screen.findByText('DNS service', { exact: false })
+
+    const input = screen.getByLabelText('Filter links')
+    await type('grep')
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByRole('button', { name: 'Remove domain grepmaste.rs' })).toBeTruthy()
+
+    await fireEvent.keyDown(input, { key: 'Backspace' })
+    expect(screen.queryByRole('button', { name: 'Remove domain grepmaste.rs' })).toBe(null)
+    expect(screen.getByText('Other thing', { exact: false })).toBeTruthy()
+  })
+})

@@ -17,6 +17,12 @@
   let editing = $state(null) // null = closed, '' = new, public_id = editing
   let expanded = $state(null) // public_id of the row with stats expanded
   let copied = $state(null) // public_id whose link was just copied
+  let selectedDomains = $state([]) // domains chosen as filters (FQDNs)
+  let selectedTags = $state([]) // tags chosen as filters (slugs)
+  let filterQuery = $state('') // current text in the typeahead box
+  let filterInput = $state(null) // the typeahead <input>, for refocusing
+  let activeIndex = $state(-1) // highlighted suggestion, -1 = none
+  let menuEl = $state(null) // the suggestion <ul>, for scrolling the active row
   let form = $state(emptyForm())
 
   function emptyForm() {
@@ -117,6 +123,98 @@
   const tagColors = $derived(
     Object.fromEntries(availableTags.filter((t) => t.color).map((t) => [t.slug, t.color]))
   )
+
+  // The list is filtered down cumulatively: a code must carry every selected
+  // domain and every selected tag (AND across all tokens). Each token added
+  // narrows the result further.
+  const filtered = $derived(
+    shortCodes.filter(
+      (sc) =>
+        selectedDomains.every((d) => sc.domains.includes(d)) &&
+        selectedTags.every((t) => sc.tags.includes(t))
+    )
+  )
+
+  // Suggestions are drawn from the already-filtered codes, so every option
+  // narrows the list to something non-empty. Already-chosen values are dropped
+  // and the query matches as a substring (a leading "#" is tolerated).
+  const suggestions = $derived.by(() => {
+    const query = filterQuery.trim().toLowerCase().replace(/^#+/, '')
+    if (!query) {
+      return []
+    }
+    const domains = [...new Set(filtered.flatMap((sc) => sc.domains))]
+      .filter((d) => !selectedDomains.includes(d) && d.toLowerCase().includes(query))
+      .sort()
+      .map((value) => ({ type: 'domain', value }))
+    const tags = [...new Set(filtered.flatMap((sc) => sc.tags))]
+      .filter((t) => !selectedTags.includes(t) && t.toLowerCase().includes(query))
+      .sort()
+      .map((value) => ({ type: 'tag', value }))
+    return [...domains, ...tags]
+  })
+
+  function addFilter(suggestion) {
+    if (suggestion.type === 'domain') {
+      if (!selectedDomains.includes(suggestion.value)) {
+        selectedDomains = [...selectedDomains, suggestion.value]
+      }
+    } else if (!selectedTags.includes(suggestion.value)) {
+      selectedTags = [...selectedTags, suggestion.value]
+    }
+    filterQuery = ''
+    activeIndex = -1
+    filterInput?.focus()
+  }
+
+  function removeDomain(fqdn) {
+    selectedDomains = selectedDomains.filter((d) => d !== fqdn)
+  }
+
+  function removeTag(slug) {
+    selectedTags = selectedTags.filter((t) => t !== slug)
+  }
+
+  // Keep the highlighted suggestion scrolled into view as the arrows move it
+  function scrollActiveIntoView() {
+    const options = menuEl?.querySelectorAll('.typeahead-option')
+    options?.[activeIndex]?.scrollIntoView?.({ block: 'nearest' })
+  }
+
+  function filterKeydown(event) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (suggestions.length > 0) {
+        activeIndex = (activeIndex + 1) % suggestions.length
+        scrollActiveIntoView()
+      }
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (suggestions.length > 0) {
+        activeIndex = (activeIndex - 1 + suggestions.length) % suggestions.length
+        scrollActiveIntoView()
+      }
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      if (suggestions.length > 0) {
+        addFilter(suggestions[activeIndex >= 0 ? activeIndex : 0])
+      }
+    } else if (event.key === 'Tab' && !event.shiftKey && suggestions.length > 0) {
+      // Tab commits the highlighted (or first) suggestion instead of leaving
+      event.preventDefault()
+      addFilter(suggestions[activeIndex >= 0 ? activeIndex : 0])
+    } else if (event.key === 'Escape') {
+      filterQuery = ''
+      activeIndex = -1
+    } else if (event.key === 'Backspace' && filterQuery === '') {
+      // Pop the last token, matching the on-screen order (tags after domains)
+      if (selectedTags.length > 0) {
+        selectedTags = selectedTags.slice(0, -1)
+      } else if (selectedDomains.length > 0) {
+        selectedDomains = selectedDomains.slice(0, -1)
+      }
+    }
+  }
 
   // Breakdown entries, biggest bucket first
   function statEntries(breakdown) {
@@ -272,13 +370,85 @@
   </Modal>
 {/if}
 
+{#if !loading && shortCodes.length > 0}
+  <div class="list-filter">
+    <div class="filter-tokens">
+      {#each selectedDomains as fqdn (fqdn)}
+        <span class="chip domain token">
+          <span>{fqdn}</span>
+          <button
+            type="button"
+            class="token-remove"
+            aria-label={`Remove domain ${fqdn}`}
+            onclick={() => removeDomain(fqdn)}
+          >×</button>
+        </span>
+      {/each}
+      {#each selectedTags as slug (slug)}
+        <span
+          class="chip token"
+          style={tagColors[slug]
+            ? `background-color: ${darkTint(tagColors[slug])}; border-color: ${readableOnDark(tagColors[slug])}; color: ${readableOnDark(tagColors[slug])}`
+            : ''}
+        >
+          <span>#{slug}</span>
+          <button
+            type="button"
+            class="token-remove"
+            aria-label={`Remove tag ${slug}`}
+            onclick={() => removeTag(slug)}
+          >×</button>
+        </span>
+      {/each}
+      <input
+        type="text"
+        class="filter-input"
+        bind:this={filterInput}
+        bind:value={filterQuery}
+        oninput={() => (activeIndex = -1)}
+        onkeydown={filterKeydown}
+        aria-label="Filter links"
+        placeholder="Filter by domain or tag…"
+      />
+    </div>
+    {#if suggestions.length > 0}
+      <ul class="typeahead-menu" aria-label="Filter suggestions" bind:this={menuEl}>
+        {#each suggestions as suggestion, index (suggestion.type + ':' + suggestion.value)}
+          <li>
+            <button
+              type="button"
+              class="typeahead-option"
+              class:active={index === activeIndex}
+              onclick={() => addFilter(suggestion)}
+              onmouseenter={() => (activeIndex = index)}
+            >
+              {#if suggestion.type === 'domain'}
+                <span class="chip domain">{suggestion.value}</span>
+              {:else}
+                <span
+                  class="chip"
+                  style={tagColors[suggestion.value]
+                    ? `background-color: ${darkTint(tagColors[suggestion.value])}; border-color: ${readableOnDark(tagColors[suggestion.value])}; color: ${readableOnDark(tagColors[suggestion.value])}`
+                    : ''}
+                >#{suggestion.value}</span>
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
+{/if}
+
 {#if loading}
   <p class="empty">Loading…</p>
 {:else if shortCodes.length === 0}
   <p class="empty">No links yet. Create your first one!</p>
+{:else if filtered.length === 0}
+  <p class="empty">No links match the filter.</p>
 {:else}
   <div class="list">
-    {#each shortCodes as sc (sc.public_id)}
+    {#each filtered as sc (sc.public_id)}
       <div
         class="row clickable expandable"
         class:expanded={expanded === sc.public_id}
